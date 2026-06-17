@@ -45,7 +45,7 @@
 │  │  └──┬───┘  └──┬───┘       └──┬───┘          │   │
 │  │     │         │              │               │   │
 │  │     ▼         ▼              ▼               │   │
-│  │  s.handlers[job.HandlerName](ctx, job)        │   │
+│  │  job.Handler(ctx, job)                        │   │
 │  │     │         │              │               │   │
 │  │     ▼         ▼              ▼               │   │
 │  │  Ack/Nack ───────────────────────────► Queue │   │
@@ -97,11 +97,11 @@ const (
 )
 
 type Job struct {
-    ID          string          `json:"id"`
-    HandlerName string          `json:"handler_name"`
-    Priority    int             `json:"priority"`
-    Payload     json.RawMessage `json:"payload"`
-    Status      JobStatus       `json:"status"`
+    ID       string          `json:"id"`
+    Handler  Handler         `json:"-"`
+    Priority int             `json:"priority"`
+    Payload  json.RawMessage `json:"payload"`
+    Status   JobStatus       `json:"status"`
 
     // 完成时填充
     Result json.RawMessage `json:"result,omitempty"`
@@ -210,8 +210,6 @@ var (
 
 ---
 
-## 4. Handler
-
 ### 4.1 函数类型
 
 ```go
@@ -222,15 +220,7 @@ var (
 type Handler func(ctx context.Context, job *Job) (json.RawMessage, error)
 ```
 
-### 4.2 注册机制
-
-Handler 通过 `WithHandler(name, fn)` 注册到 Scheduler 的注册表中。Job 通过 `HandlerName` 指定由哪个 Handler 执行：
-
-```
-Job.HandlerName = "comfyui.generate"  ──►  Scheduler 注册表查找  ──►  对应 Handler 执行
-```
-
-Job 和 Handler 通过名称解耦 —— Job 只存名称（可序列化），Handler 函数由 Scheduler 持有。
+Handler 定义在 `scheduler` 包，但作为 `Job.Handler` 字段使用。`json:"-"` 标记使其在持久化时被跳过——对于内存队列，Job 直接持有函数指针；对于 Redis/MySQL 等持久化后端，具体实现自行处理重建。
 
 ## 5. Scheduler 设计
 
@@ -241,7 +231,6 @@ Job 和 Handler 通过名称解耦 —— Job 只存名称（可序列化），H
 
 type Scheduler struct {
     queue      Queue
-    handlers   map[string]Handler
     workers    int
     onComplete OnJobComplete
 
@@ -259,9 +248,6 @@ type SchedulerOption func(*Scheduler)
 
 // WithWorkerCount 设置 worker 协程数，默认 1
 func WithWorkerCount(n int) SchedulerOption
-
-// WithHandler 注册一个 handler，关联名称与 job.HandlerName 对应
-func WithHandler(name string, h Handler) SchedulerOption
 
 // WithOnComplete 设置任务完成回调，默认 nil（不回调）
 func WithOnComplete(fn OnJobComplete) SchedulerOption
@@ -320,7 +306,7 @@ func (s *Scheduler) workerLoop() {
 
 ```go
 func (s *Scheduler) execute(job *Job) {
-    log.Printf("[scheduler] executing job %s (handler=%s)", job.ID, job.HandlerName)
+    log.Printf("[scheduler] executing job %s", job.ID)
 
     // 1. 构建 job 级别 context（带 MaxRunTime 超时）
     execCtx := s.ctx
@@ -330,18 +316,10 @@ func (s *Scheduler) execute(job *Job) {
         defer cancel()
     }
 
-    // 2. 查找 handler
-    handler, ok := s.handlers[job.HandlerName]
-    if !ok {
-        log.Printf("[scheduler] handler %s not found for job %s", job.HandlerName, job.ID)
-        s.queue.Nack(s.ctx, job.ID, "handler not found: "+job.HandlerName)
-        return
-    }
+    // 2. 执行 handler
+    result, err := job.Handler(execCtx, job)
 
-    // 3. 执行 handler
-    result, err := handler(execCtx, job)
-
-    // 4. 更新队列状态
+    // 3. 更新队列状态
     if err != nil {
         if nackErr := s.queue.Nack(s.ctx, job.ID, err.Error()); nackErr != nil {
             log.Printf("[scheduler] nack error: %v", nackErr)
@@ -356,7 +334,7 @@ func (s *Scheduler) execute(job *Job) {
         job.Result = result
     }
 
-    // 5. 调用回调函数
+    // 4. 调用回调函数
     if s.onComplete != nil {
         s.onComplete(s.ctx, job)
     }
@@ -400,7 +378,6 @@ type OnJobComplete func(ctx context.Context, job *Job)
 
 ```go
 s := scheduler.NewScheduler(q,
-    scheduler.WithHandler("comfyui.generate", h.generate),
     scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
         switch job.Status {
         case queue.StatusCompleted:
@@ -413,7 +390,6 @@ s := scheduler.NewScheduler(q,
 
 // 需要 HTTP 回调的用户，在 OnJobComplete 内自行实现：
 s := scheduler.NewScheduler(q,
-    scheduler.WithHandler("comfyui.generate", h.generate),
     scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
         payload := map[string]any{
             "job_id": job.ID,
@@ -597,30 +573,11 @@ import (
     "os/signal"
 )
 
-type ComfyUIGenerateHandler struct {
-    client *comfyui.Client
-}
-
-func (h *ComfyUIGenerateHandler) generate(ctx context.Context, job *queue.Job) (json.RawMessage, error) {
-    var workflow map[string]any
-    if err := json.Unmarshal(job.Payload, &workflow); err != nil {
-        return nil, err
-    }
-    result, err := h.client.GenerateImage(ctx, workflow)
-    if err != nil {
-        return nil, err
-    }
-    return json.Marshal(result)
-}
-
 func main() {
     q := memory.NewMemoryQueue()
-    h := &ComfyUIGenerateHandler{
-        client: comfyui.NewClient("http://127.0.0.1:8188"),
-    }
+    client := comfyui.NewClient("http://127.0.0.1:8188")
 
     s := scheduler.NewScheduler(q,
-        scheduler.WithHandler("comfyui.generate", h.generate),
         scheduler.WithWorkerCount(2),
         scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
             switch job.Status {
@@ -646,11 +603,22 @@ func main() {
     // 提交任务
     workflow := map[string]any{ /* ... */ }
     payload, _ := json.Marshal(workflow)
+
+    generate := func(ctx context.Context, job *queue.Job) (json.RawMessage, error) {
+        var wf map[string]any
+        json.Unmarshal(job.Payload, &wf)
+        result, err := client.GenerateImage(ctx, wf)
+        if err != nil {
+            return nil, err
+        }
+        return json.Marshal(result)
+    }
+
     job := &queue.Job{
-        ID:          "job-001",
-        HandlerName: "comfyui.generate",
-        Priority:    10,
-        Payload:     payload,
+        ID:       "job-001",
+        Handler:  generate,
+        Priority: 10,
+        Payload:  payload,
     }
     if err := s.Submit(ctx, job); err != nil {
         log.Fatal(err)
@@ -664,10 +632,7 @@ func main() {
 ### 10.2 无回调模式
 
 ```go
-s := scheduler.NewScheduler(q,
-    scheduler.WithHandler("comfyui.generate", h.generate),
-    scheduler.WithWorkerCount(1),
-)
+s := scheduler.NewScheduler(q, scheduler.WithWorkerCount(1))
 // 不传 WithOnComplete，默认 nil，不触发任何回调
 
 // 调用方通过 queue.Get() 轮询结果：
@@ -700,7 +665,6 @@ Score 计算：`effective_priority * 1e12 + (MaxInt - unix_nano/1000)` 以支持
 ```sql
 CREATE TABLE queue_jobs (
     id          VARCHAR(64) PRIMARY KEY,
-    handler_name VARCHAR(64) NOT NULL,
     priority    INT NOT NULL DEFAULT 0,
     payload     JSON NOT NULL,
     status      ENUM('pending','running','completed','failed','cancelled') NOT NULL,
