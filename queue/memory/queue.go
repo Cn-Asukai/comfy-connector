@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/asukai/comfy-connector/queue"
+	"github.com/cn-asukai/comfy-connector/queue"
 )
 
 const defaultAgingFactor = 0.01

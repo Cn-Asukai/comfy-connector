@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/asukai/comfy-connector/comfyui"
-	"github.com/asukai/comfy-connector/queue"
-	"github.com/asukai/comfy-connector/queue/memory"
-	"github.com/asukai/comfy-connector/scheduler"
+	"github.com/cn-asukai/comfy-connector/comfyui"
+	"github.com/cn-asukai/comfy-connector/queue"
+	"github.com/cn-asukai/comfy-connector/queue/memory"
+	"github.com/cn-asukai/comfy-connector/scheduler"
 )
 
 func main() {
