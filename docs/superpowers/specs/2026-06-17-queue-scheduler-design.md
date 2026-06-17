@@ -70,7 +70,7 @@ comfyui_connector/
 │   └── memory/             #   内存实现（默认，单机/dev）
 │       └── queue.go
 ├── scheduler/              # 调度器
-│   ├── handler.go          #   Handler 函数类型 & HandlerRouter
+│   ├── handler.go          #   Handler 函数类型
 │   ├── scheduler.go        #   Scheduler: worker pool + 分发循环
 │   ├── callback.go         #   OnJobComplete 回调函数类型
 │   └── options.go          #   函数式选项
@@ -222,35 +222,7 @@ var (
 type Handler func(ctx context.Context, job *Job) (json.RawMessage, error)
 ```
 
-### 4.2 HandlerRouter — 多类型路由
 
-```go
-// HandlerRouter 按 job.Type 分发到不同 Handler 函数
-type HandlerRouter struct {
-    handlers map[string]Handler
-}
-
-func NewHandlerRouter() *HandlerRouter {
-    return &HandlerRouter{handlers: make(map[string]Handler)}
-}
-
-func (r *HandlerRouter) Register(jobType string, h Handler) {
-    r.handlers[jobType] = h
-}
-
-// Route 返回一个 Handler，可直接传给 Scheduler
-func (r *HandlerRouter) Route() Handler {
-    return func(ctx context.Context, job *Job) (json.RawMessage, error) {
-        h, ok := r.handlers[job.Type]
-        if !ok {
-            return nil, fmt.Errorf("no handler for job type: %s", job.Type)
-        }
-        return h(ctx, job)
-    }
-}
-```
-
-Route() 返回闭包——Handler 是函数类型，不需要适配器。
 
 ---
 
@@ -669,19 +641,7 @@ func main() {
 }
 ```
 
-### 10.2 多类型任务 — HandlerRouter
-
-```go
-router := scheduler.NewHandlerRouter()
-router.Register("comfyui.generate", h.generate)
-router.Register("image.resize",   resizeHandler.generate)
-router.Register("thumbnail",      thumbHandler.generate)
-
-s := scheduler.NewScheduler(q, router.Route(), scheduler.WithWorkerCount(4))
-s.Start(ctx)
-```
-
-### 10.3 无回调模式
+### 10.2 无回调模式
 
 ```go
 s := scheduler.NewScheduler(q, handler, scheduler.WithWorkerCount(1))
