@@ -246,9 +246,14 @@ type Scheduler struct {
     handlers map[string]Handler
     workers  int
 
+    // ctx 是 worker 协程的生命周期根 context，Stop() 时 cancel 触发全部 worker 退出
     ctx    context.Context
     cancel context.CancelFunc
-    wg     sync.WaitGroup
+
+    // wg 等待所有 worker 协程退出，保障优雅关闭
+    wg sync.WaitGroup
+
+    // active 当前正在执行任务的 worker 数量
     active atomic.Int64
 }
 ```
