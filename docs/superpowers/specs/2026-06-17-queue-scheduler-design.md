@@ -45,7 +45,7 @@
 │  │  └──┬───┘  └──┬───┘       └──┬───┘          │   │
 │  │     │         │              │               │   │
 │  │     ▼         ▼              ▼               │   │
-│  │  Handler.Handle(ctx, job)                    │   │
+│  │  handler(ctx, job)                             │   │
 │  │     │         │              │               │   │
 │  │     ▼         ▼              ▼               │   │
 │  │  Ack/Nack ───────────────────────────► Queue │   │
@@ -70,7 +70,7 @@ comfyui_connector/
 │   └── memory/             #   内存实现（默认，单机/dev）
 │       └── queue.go
 ├── scheduler/              # 调度器
-│   ├── handler.go          #   Handler 接口 & HandlerRouter
+│   ├── handler.go          #   Handler 函数类型 & HandlerRouter
 │   ├── scheduler.go        #   Scheduler: worker pool + 分发循环
 │   ├── callback.go         #   OnJobComplete 回调函数类型
 │   └── options.go          #   函数式选项
@@ -210,33 +210,22 @@ var (
 
 ---
 
-## 4. Handler 接口
+## 4. Handler
 
-### 4.1 接口定义
+### 4.1 函数类型
 
 ```go
 // scheduler/handler.go
 
-type Handler interface {
-    // Handle 执行任务，返回结果 JSON。
-    // ctx 继承 scheduler 生命周期 & job.MaxRunTime 超时。
-    Handle(ctx context.Context, job *Job) (json.RawMessage, error)
-}
+// Handler 执行任务，返回结果 JSON。
+// ctx 继承 scheduler 生命周期 & job.MaxRunTime 超时。
+type Handler func(ctx context.Context, job *Job) (json.RawMessage, error)
 ```
 
-### 4.2 函数适配器
+### 4.2 HandlerRouter — 多类型路由
 
 ```go
-type HandlerFunc func(ctx context.Context, job *Job) (json.RawMessage, error)
-
-func (f HandlerFunc) Handle(ctx context.Context, job *Job) (json.RawMessage, error) {
-    return f(ctx, job)
-}
-```
-
-### 4.3 HandlerRouter — 多类型路由
-
-```go
+// HandlerRouter 按 job.Type 分发到不同 Handler 函数
 type HandlerRouter struct {
     handlers map[string]Handler
 }
@@ -249,16 +238,19 @@ func (r *HandlerRouter) Register(jobType string, h Handler) {
     r.handlers[jobType] = h
 }
 
-func (r *HandlerRouter) Handle(ctx context.Context, job *Job) (json.RawMessage, error) {
-    h, ok := r.handlers[job.Type]
-    if !ok {
-        return nil, fmt.Errorf("no handler for job type: %s", job.Type)
+// Route 返回一个 Handler，可直接传给 Scheduler
+func (r *HandlerRouter) Route() Handler {
+    return func(ctx context.Context, job *Job) (json.RawMessage, error) {
+        h, ok := r.handlers[job.Type]
+        if !ok {
+            return nil, fmt.Errorf("no handler for job type: %s", job.Type)
+        }
+        return h(ctx, job)
     }
-    return h.Handle(ctx, job)
 }
 ```
 
-`HandlerRouter` 自身实现 `Handler` 接口，可透传给 Scheduler。
+Route() 返回闭包——Handler 是函数类型，不需要适配器。
 
 ---
 
@@ -358,7 +350,7 @@ func (s *Scheduler) execute(job *Job) {
     }
 
     // 2. 执行 handler
-    result, err := s.handler.Handle(execCtx, job)
+    result, err := s.handler(execCtx, job)
 
     // 3. 更新队列状态
     if err != nil {
@@ -618,7 +610,7 @@ type ComfyUIGenerateHandler struct {
     client *comfyui.Client
 }
 
-func (h *ComfyUIGenerateHandler) Handle(ctx context.Context, job *queue.Job) (json.RawMessage, error) {
+func (h *ComfyUIGenerateHandler) generate(ctx context.Context, job *queue.Job) (json.RawMessage, error) {
     var workflow map[string]any
     if err := json.Unmarshal(job.Payload, &workflow); err != nil {
         return nil, err
@@ -632,11 +624,11 @@ func (h *ComfyUIGenerateHandler) Handle(ctx context.Context, job *queue.Job) (js
 
 func main() {
     q := memory.NewMemoryQueue()
-    handler := &ComfyUIGenerateHandler{
+    h := &ComfyUIGenerateHandler{
         client: comfyui.NewClient("http://127.0.0.1:8188"),
     }
 
-    s := scheduler.NewScheduler(q, handler,
+    s := scheduler.NewScheduler(q, h.generate,
         scheduler.WithWorkerCount(2),
         scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
             switch job.Status {
@@ -681,11 +673,11 @@ func main() {
 
 ```go
 router := scheduler.NewHandlerRouter()
-router.Register("comfyui.generate", &ComfyUIGenerateHandler{client: comfyClient})
-router.Register("image.resize",   &ImageResizeHandler{})
-router.Register("thumbnail",      &ThumbnailHandler{})
+router.Register("comfyui.generate", h.generate)
+router.Register("image.resize",   resizeHandler.generate)
+router.Register("thumbnail",      thumbHandler.generate)
 
-s := scheduler.NewScheduler(q, router, scheduler.WithWorkerCount(4))
+s := scheduler.NewScheduler(q, router.Route(), scheduler.WithWorkerCount(4))
 s.Start(ctx)
 ```
 
@@ -777,7 +769,7 @@ github.com/google/uuid  (已有 — 生成 Job ID)
 | | `Get` | 按 ID 查询 |
 | | `Cancel` | 取消 pending 任务 |
 | | `Size` | pending 数量 |
-| `Handler` | `Handle` | 执行任务 |
+| `Handler` | 函数类型 `func(ctx, *Job) (json.RawMessage, error)` | 执行任务 |
 | ~~`CallbackNotifier`~~ | ~~`Notify`~~ | ~~发送回调~~ |
 | `OnJobComplete` | 函数类型 `func(ctx, *Job)` | Scheduler 级别回调 |
 
