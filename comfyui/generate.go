@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -28,7 +28,7 @@ func (c *Client) GenerateImage(ctx context.Context, workflow map[string]any) (*G
 	}
 
 	promptID := submitResp.PromptID
-	log.Printf("[comfyui] prompt submitted: %s", promptID)
+	slog.Info("prompt submitted", "prompt_id", promptID)
 
 	ws, err := c.ConnectWS(ctx)
 	if err != nil {
@@ -64,7 +64,7 @@ func (c *Client) GenerateImage(ctx context.Context, workflow map[string]any) (*G
 		case "executed":
 			var data WSExecutedData
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
-				log.Printf("[comfyui] unmarshal executed: %v", err)
+				slog.Warn("unmarshal executed failed", "error", err)
 				continue
 			}
 
@@ -79,18 +79,18 @@ func (c *Client) GenerateImage(ctx context.Context, workflow map[string]any) (*G
 			}
 			if len(images) > 0 {
 				result.ImagesByNode[data.Node] = images
-				log.Printf("[comfyui] node %s executed, %d images", data.Node, len(images))
+				slog.Info("node executed", "node", data.Node, "images", len(images))
 			}
 
 		case "execution_error":
 			var data WSExecutionErrorData
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
-				log.Printf("[comfyui] unmarshal execution_error: %v", err)
+				slog.Warn("unmarshal execution_error failed", "error", err)
 				continue
 			}
 			errMsg := fmt.Sprintf("execution error [%s]: %s", data.ExceptionType, data.ExceptionMessage)
 			result.Errors = append(result.Errors, errMsg)
-			log.Printf("[comfyui] %s", errMsg)
+			slog.Error("execution failed", "error", errMsg)
 			return result, fmt.Errorf("execution failed: %s", errMsg)
 
 		case "execution_start":
@@ -98,11 +98,11 @@ func (c *Client) GenerateImage(ctx context.Context, workflow map[string]any) (*G
 				PromptID string `json:"prompt_id"`
 			}
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
-				log.Printf("[comfyui] unmarshal execution_start: %v", err)
+				slog.Warn("unmarshal execution_start failed", "error", err)
 				continue
 			}
 			if data.PromptID == promptID {
-				log.Printf("[comfyui] execution started for %s", promptID)
+				slog.Info("execution started", "prompt_id", promptID)
 			}
 		}
 	}
