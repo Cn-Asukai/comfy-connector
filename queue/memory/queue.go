@@ -7,15 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"comfyui_connector/queue"
+	"github.com/asukai/comfy-connector/queue"
 )
 
 const defaultAgingFactor = 0.01
 
 type MemoryQueue struct {
-	mu    sync.Mutex
-	jobs  map[string]*queue.Job
-	cond  *sync.Cond
+	mu   sync.Mutex
+	jobs map[string]*queue.Job
+	cond *sync.Cond
 
 	pendingIDs  map[string]struct{}
 	agingFactor float64

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"comfyui_connector/queue"
+	"github.com/asukai/comfy-connector/queue"
 )
 
 const defaultDequeueTimeout = 5 * time.Second

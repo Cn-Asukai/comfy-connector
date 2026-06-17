@@ -1,16 +1,17 @@
 package main
 
 import (
-	"comfyui_connector/comfyui"
-	"comfyui_connector/queue"
-	"comfyui_connector/queue/memory"
-	"comfyui_connector/scheduler"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
 	"time"
+
+	"github.com/asukai/comfy-connector/comfyui"
+	"github.com/asukai/comfy-connector/queue"
+	"github.com/asukai/comfy-connector/queue/memory"
+	"github.com/asukai/comfy-connector/scheduler"
 )
 
 func main() {

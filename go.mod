@@ -1,4 +1,4 @@
-module comfyui_connector
+module github.com/asukai/comfy-connector
 
 go 1.26.2
 
