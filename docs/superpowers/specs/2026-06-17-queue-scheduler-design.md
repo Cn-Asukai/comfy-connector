@@ -18,7 +18,7 @@
 | 任务模型 | 通用抽象任务（ComfyUI 生成只是其中一个 handler） |
 | 优先级 | 数值优先级 + 防饥饿（aging） |
 | 重试 | 不自动重试，失败即标记 failed，上层自行决定重新入队 |
-| 结果交付 | Callback URL（HTTP POST） |
+| 结果交付 | 回调函数 `OnJobComplete(ctx, job)` |
 | 调度 | 仅 worker 分发（无延迟/定时/cron） |
 
 ### 1.3 架构
@@ -51,7 +51,7 @@
 │  │  Ack/Nack ───────────────────────────► Queue │   │
 │  │     │                                         │   │
 │  │     ▼                                         │   │
-│  │  CallbackNotifier.Notify(ctx, job)            │   │
+│  │  OnJobComplete(ctx, job)                      │   │
 │  └──────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────┘
 ```
@@ -72,7 +72,7 @@ comfyui_connector/
 ├── scheduler/              # 调度器
 │   ├── handler.go          #   Handler 接口 & HandlerRouter
 │   ├── scheduler.go        #   Scheduler: worker pool + 分发循环
-│   ├── callback.go         #   CallbackNotifier 接口 + HTTP 实现
+│   ├── callback.go         #   OnJobComplete 回调函数类型
 │   └── options.go          #   函数式选项
 └── main.go
 ```
@@ -102,9 +102,6 @@ type Job struct {
     Priority int             `json:"priority"`
     Payload  json.RawMessage `json:"payload"`
     Status   JobStatus       `json:"status"`
-
-    // Callback URL，为空则不回调
-    Callback string `json:"callback,omitempty"`
 
     // 完成时填充
     Result json.RawMessage `json:"result,omitempty"`
@@ -273,10 +270,10 @@ func (r *HandlerRouter) Handle(ctx context.Context, job *Job) (json.RawMessage, 
 // scheduler/scheduler.go
 
 type Scheduler struct {
-    queue    Queue
-    handler  Handler
-    workers  int
-    notifier CallbackNotifier
+    queue      Queue
+    handler    Handler
+    workers    int
+    onComplete OnJobComplete
 
     ctx    context.Context
     cancel context.CancelFunc
@@ -293,8 +290,8 @@ type SchedulerOption func(*Scheduler)
 // WithWorkerCount 设置 worker 协程数，默认 1
 func WithWorkerCount(n int) SchedulerOption
 
-// WithCallbackNotifier 设置回调通知器，默认 NoopNotifier（不回调）
-func WithCallbackNotifier(n CallbackNotifier) SchedulerOption
+// WithOnComplete 设置任务完成回调，默认 nil（不回调）
+func WithOnComplete(fn OnJobComplete) SchedulerOption
 
 // WithDequeueTimeout 设置单次 Dequeue 阻塞超时，默认 5s
 func WithDequeueTimeout(d time.Duration) SchedulerOption
@@ -378,11 +375,9 @@ func (s *Scheduler) execute(job *Job) {
         job.Result = result
     }
 
-    // 4. 发送回调
-    if job.Callback != "" && s.notifier != nil {
-        if notifyErr := s.notifier.Notify(s.ctx, job); notifyErr != nil {
-            log.Printf("[scheduler] notify error: %v", notifyErr)
-        }
+    // 4. 调用回调函数
+    if s.onComplete != nil {
+        s.onComplete(s.ctx, job)
     }
 }
 ```
@@ -396,71 +391,58 @@ func (s *Scheduler) Submit(ctx context.Context, job *Job) error
 
 ---
 
-## 6. Callback 回调
+## 6. 回调
 
-### 6.1 接口定义
+### 6.1 函数类型
 
 ```go
 // scheduler/callback.go
 
-type CallbackNotifier interface {
-    Notify(ctx context.Context, job *Job) error
-}
+// OnJobComplete 任务完成（成功或失败）时由 Scheduler 调用。
+// job.Status / job.Result / job.Error 已填充完成状态。
+// 回调在 worker goroutine 内执行，耗时操作应自行起 goroutine。
+type OnJobComplete func(ctx context.Context, job *Job)
 ```
 
-### 6.2 HTTP 实现
+### 6.2 设计要点
+
+| 特性 | 说明 |
+|------|------|
+| 注入位置 | Scheduler 级别，通过 `WithOnComplete(fn)` 设置 |
+| 调用时机 | Ack 或 Nack 成功后，job 状态已落盘 |
+| 调用线程 | 当前 worker goroutine |
+| 错误处理 | 回调返回 error 仅打日志，不影响 job 状态（已完成） |
+| 重试 | 回调函数自行决定，Scheduler 不重试 |
+| 默认值 | nil，设置后才调用 |
+
+### 6.3 示例
 
 ```go
-type HTTPNotifier struct {
-    client     *http.Client
-    maxRetries int
-}
+s := scheduler.NewScheduler(q, handler,
+    scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
+        switch job.Status {
+        case queue.StatusCompleted:
+            log.Printf("job %s done: %s", job.ID, job.Result)
+        case queue.StatusFailed:
+            log.Printf("job %s failed: %s", job.ID, job.Error)
+        }
+    }),
+)
 
-func NewHTTPNotifier(client *http.Client, maxRetries int) *HTTPNotifier
+// 需要 HTTP 回调的用户，在 OnJobComplete 内自行实现：
+s := scheduler.NewScheduler(q, handler,
+    scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
+        payload := map[string]any{
+            "job_id": job.ID,
+            "status": job.Status,
+            "result": job.Result,
+            "error":  job.Error,
+        }
+        b, _ := json.Marshal(payload)
+        http.Post("http://myapp/callback", "application/json", bytes.NewReader(b))
+    }),
+)
 ```
-
-#### 回调请求格式
-
-```
-POST {job.Callback}
-Content-Type: application/json
-
-{
-    "job_id":    "uuid-xxx",
-    "type":      "comfyui.generate",
-    "status":    "completed",
-    "result":    {...},
-    "error":     "",
-    "timestamp": "2026-06-17T10:00:00Z"
-}
-```
-
-```go
-type CallbackPayload struct {
-    JobID     string          `json:"job_id"`
-    Type      string          `json:"type"`
-    Status    JobStatus       `json:"status"`
-    Result    json.RawMessage `json:"result,omitempty"`
-    Error     string          `json:"error,omitempty"`
-    Timestamp time.Time       `json:"timestamp"`
-}
-```
-
-#### 重试策略
-
-- 默认重试 3 次，指数退避（1s / 2s / 4s）
-- HTTP 5xx 或网络错误重试，4xx 不重试
-- 重试期间尊重 `ctx.Done()`
-
-### 6.3 Noop 实现
-
-```go
-type NoopNotifier struct{}
-
-func (n *NoopNotifier) Notify(ctx context.Context, job *Job) error { return nil }
-```
-
-默认不使用回调，避免未预期的外部调用。
 
 ---
 
@@ -653,11 +635,17 @@ func main() {
     handler := &ComfyUIGenerateHandler{
         client: comfyui.NewClient("http://127.0.0.1:8188"),
     }
-    notifier := scheduler.NewHTTPNotifier(http.DefaultClient, 3)
 
     s := scheduler.NewScheduler(q, handler,
         scheduler.WithWorkerCount(2),
-        scheduler.WithCallbackNotifier(notifier),
+        scheduler.WithOnComplete(func(ctx context.Context, job *queue.Job) {
+            switch job.Status {
+            case queue.StatusCompleted:
+                log.Printf("job %s completed: %s", job.ID, job.Result)
+            case queue.StatusFailed:
+                log.Printf("job %s failed: %s", job.ID, job.Error)
+            }
+        }),
     )
 
     ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -679,7 +667,6 @@ func main() {
         Type:     "comfyui.generate",
         Priority: 10,
         Payload:  payload,
-        Callback: "http://myapp/callback",
     }
     if err := s.Submit(ctx, job); err != nil {
         log.Fatal(err)
@@ -706,7 +693,7 @@ s.Start(ctx)
 
 ```go
 s := scheduler.NewScheduler(q, handler, scheduler.WithWorkerCount(1))
-// 不传 WithCallbackNotifier，使用默认 NoopNotifier，不发送任何回调
+// 不传 WithOnComplete，默认 nil，不触发任何回调
 
 // 调用方通过 queue.Get() 轮询结果：
 job, _ := q.Get(ctx, "job-001")
@@ -742,7 +729,6 @@ CREATE TABLE queue_jobs (
     priority    INT NOT NULL DEFAULT 0,
     payload     JSON NOT NULL,
     status      ENUM('pending','running','completed','failed','cancelled') NOT NULL,
-    callback    VARCHAR(512) DEFAULT '',
     result      JSON,
     error       TEXT,
     worker_id   VARCHAR(64) DEFAULT '',
@@ -792,7 +778,8 @@ github.com/google/uuid  (已有 — 生成 Job ID)
 | | `Cancel` | 取消 pending 任务 |
 | | `Size` | pending 数量 |
 | `Handler` | `Handle` | 执行任务 |
-| `CallbackNotifier` | `Notify` | 发送回调 |
+| ~~`CallbackNotifier`~~ | ~~`Notify`~~ | ~~发送回调~~ |
+| `OnJobComplete` | 函数类型 `func(ctx, *Job)` | Scheduler 级别回调 |
 
 ## 附录 B：状态转换矩阵
 
