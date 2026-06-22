@@ -3,7 +3,6 @@ package queue
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -19,7 +18,7 @@ type Queue interface {
 
 	Dequeue(ctx context.Context, timeout time.Duration) (*Job, error)
 
-	Ack(ctx context.Context, jobID string, result fmt.Stringer) error
+	Ack(ctx context.Context, jobID string, result string) error
 
 	Nack(ctx context.Context, jobID string, reason string) error
 

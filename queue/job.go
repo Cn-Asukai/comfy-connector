@@ -1,7 +1,6 @@
 package queue
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -22,9 +21,9 @@ type Job struct {
 	Payload     any       `json:"payload"`
 	Status      JobStatus `json:"status"`
 
-	Result   fmt.Stringer `json:"result,omitempty"`
-	Error    string       `json:"error,omitempty"`
-	WorkerID string       `json:"worker_id,omitempty"`
+	Result   string `json:"result,omitempty"`
+	Error    string `json:"error,omitempty"`
+	WorkerID string `json:"worker_id,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	StartedAt *time.Time `json:"started_at,omitempty"`

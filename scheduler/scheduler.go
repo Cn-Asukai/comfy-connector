@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -13,7 +12,7 @@ import (
 
 const defaultDequeueTimeout = 5 * time.Second
 
-type Handler func(ctx context.Context, job *queue.Job) (fmt.Stringer, error)
+type Handler func(ctx context.Context, job *queue.Job) (string, error)
 
 type Scheduler struct {
 	queue          queue.Queue
