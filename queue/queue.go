@@ -2,8 +2,8 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -19,7 +19,7 @@ type Queue interface {
 
 	Dequeue(ctx context.Context, timeout time.Duration) (*Job, error)
 
-	Ack(ctx context.Context, jobID string, result json.RawMessage) error
+	Ack(ctx context.Context, jobID string, result fmt.Stringer) error
 
 	Nack(ctx context.Context, jobID string, reason string) error
 

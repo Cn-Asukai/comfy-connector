@@ -1,7 +1,7 @@
 package queue
 
 import (
-	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -16,15 +16,15 @@ const (
 )
 
 type Job struct {
-	ID          string          `json:"id"`
-	HandlerName string          `json:"handler_name"`
-	Priority    int             `json:"priority"`
-	Payload     json.RawMessage `json:"payload"`
-	Status      JobStatus       `json:"status"`
+	ID          string    `json:"id"`
+	HandlerName string    `json:"handler_name"`
+	Priority    int       `json:"priority"`
+	Payload     any       `json:"payload"`
+	Status      JobStatus `json:"status"`
 
-	Result   json.RawMessage `json:"result,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	WorkerID string          `json:"worker_id,omitempty"`
+	Result   fmt.Stringer `json:"result,omitempty"`
+	Error    string       `json:"error,omitempty"`
+	WorkerID string       `json:"worker_id,omitempty"`
 
 	CreatedAt time.Time  `json:"created_at"`
 	StartedAt *time.Time `json:"started_at,omitempty"`

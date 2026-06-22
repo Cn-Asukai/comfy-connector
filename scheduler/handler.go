@@ -2,9 +2,12 @@ package scheduler
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 
 	"github.com/cn-asukai/comfy-connector/queue"
 )
 
-type Handler func(ctx context.Context, job *queue.Job) (json.RawMessage, error)
+type SchedulerHandler interface {
+	GetHandlerName() string
+	Execute(ctx context.Context, job *queue.Job) (fmt.Stringer, error)
+}

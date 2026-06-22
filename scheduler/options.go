@@ -4,9 +4,15 @@ import "time"
 
 type SchedulerOption func(*Scheduler)
 
-func WithHandler(name string, h Handler) SchedulerOption {
+func WithHandlerFunc(name string, h Handler) SchedulerOption {
 	return func(s *Scheduler) {
 		s.handlers[name] = h
+	}
+}
+
+func WithHandler(name string, h SchedulerHandler) SchedulerOption {
+	return func(s *Scheduler) {
+		s.handlers[name] = h.Execute
 	}
 }
 

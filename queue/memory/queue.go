@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"sync"
 	"time"
@@ -114,7 +113,7 @@ func (m *MemoryQueue) effectivePriority(job *queue.Job, now time.Time) float64 {
 	return float64(job.Priority) + wait*m.agingFactor
 }
 
-func (m *MemoryQueue) Ack(ctx context.Context, jobID string, result json.RawMessage) error {
+func (m *MemoryQueue) Ack(ctx context.Context, jobID string, result any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
