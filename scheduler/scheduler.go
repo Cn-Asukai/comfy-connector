@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -83,7 +84,9 @@ func (s *Scheduler) workerLoop() {
 
 		job, err := s.queue.Dequeue(s.ctx, s.dequeueTimeout)
 		if err != nil {
-			slog.Error("dequeue error", "error", err)
+			if !errors.Is(err, context.Canceled) {
+				slog.Error("dequeue error", "error", err)
+			}
 			continue
 		}
 		if job == nil {
